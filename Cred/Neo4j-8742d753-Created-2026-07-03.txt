@@ -1,0 +1,7 @@
+# Wait 60 seconds before connecting using these details, or login to https://console.neo4j.io to validate the Aura Instance is available
+NEO4J_URI=neo4j+s://8742d753.databases.neo4j.io
+NEO4J_USERNAME=8742d753
+NEO4J_PASSWORD=hP2TGZzheO0Nw0BIqjnn1_jWaexvnbtPZFuoclY4oHg
+NEO4J_DATABASE=8742d753
+AURA_INSTANCEID=8742d753
+AURA_INSTANCENAME=CHI_Memory
