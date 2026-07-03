@@ -1,10 +1,10 @@
 self.__precacheManifest = (self.__precacheManifest || []).concat([
   {
-    "revision": "757bb64ccb4bd630c271170af0936048",
+    "revision": "bb90947b9ed33912f52a274fb48e0ffe",
     "url": "/CHIMemories/index.html"
   },
   {
-    "revision": "ac907989b4441b2fafee",
+    "revision": "59d08a47ce405626a7fc",
     "url": "/CHIMemories/static/css/main.ead59979.chunk.css"
   },
   {
@@ -16,8 +16,8 @@ self.__precacheManifest = (self.__precacheManifest || []).concat([
     "url": "/CHIMemories/static/js/2.9ec64b76.chunk.js.LICENSE.txt"
   },
   {
-    "revision": "ac907989b4441b2fafee",
-    "url": "/CHIMemories/static/js/main.632472cb.chunk.js"
+    "revision": "59d08a47ce405626a7fc",
+    "url": "/CHIMemories/static/js/main.21cc1def.chunk.js"
   },
   {
     "revision": "3ddc818cce9181dd5284",
