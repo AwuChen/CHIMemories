@@ -1674,25 +1674,15 @@ const ResetPhone = () => {
           }
         }, [latestNode, focusTimeout]);
 
-        // Initial zoom when graph first loads — center on viewer's network
+        // Fit graph when data loads
         useEffect(() => {
-          if (fgRef.current && graphData.nodes.length > 0 && viewerNode) {
-            setTimeout(() => {
-              if (!fgRef.current) return;
-              const viewerGraphNode = graphData.nodes.find((n) => n.name === viewerNode);
-              if (viewerGraphNode && viewerGraphNode.x != null && viewerGraphNode.y != null) {
-                fgRef.current.centerAt(viewerGraphNode.x, viewerGraphNode.y, 1000);
-                fgRef.current.zoom(1.8, 1000);
-              } else {
-                fgRef.current.zoomToFit(800, 80);
-              }
-            }, 1200);
-          } else if (fgRef.current && graphData.nodes.length > 0 && !lastAction) {
-            setTimeout(() => {
-              if (fgRef.current) fgRef.current.zoomToFit(800, 80);
-            }, 1000);
+          if (fgRef.current && graphData.nodes.length > 0) {
+            const timer = setTimeout(() => {
+              if (fgRef.current) fgRef.current.zoomToFit(600, 60);
+            }, 1500);
+            return () => clearTimeout(timer);
           }
-        }, [graphData.nodes.length, viewerNode, fgRef, lastAction]);
+        }, [graphData.nodes.length, graphData.links.length, fgRef, timelineMode]);
 
         // Reload graph if viewer is set but data is empty (e.g. returning from /me)
         useEffect(() => {
@@ -1934,325 +1924,70 @@ const ResetPhone = () => {
         const handleInputChange = (event) => {
           const input = event.target.value;
           setInputValue(input);
-          handleChange(event); // updates CypherViz state.query too
           
-          // Update user activity when typing
           updateUserActivity();
           
-          // Clear other actions when searching
           if (input.trim()) {
             setClickedNode(null);
             setLastAction('search');
             
-            // Clear any existing focus timeouts when new visual states are set
             if (focusTimeout) {
               clearTimeout(focusTimeout);
               setFocusTimeout(null);
             }
-            setAutoZoomTriggered(false); // Allow new auto-zoom for this search
+            setAutoZoomTriggered(false);
+          } else {
+            setLastAction(null);
           }
+        };
+
+        const focusGraphOnNode = (nodeName) => {
+          const node = graphData.nodes.find((n) => n.name === nodeName);
+          if (!node || !fgRef.current) return;
+          const tryFocus = (attempt = 0) => {
+            const target = graphData.nodes.find((n) => n.name === nodeName);
+            if (!target || !fgRef.current) return;
+            if (target.x == null || target.y == null) {
+              if (attempt < 12) setTimeout(() => tryFocus(attempt + 1), 250);
+              return;
+            }
+            fgRef.current.centerAt(target.x, target.y, 800);
+            fgRef.current.zoom(2.2, 800);
+          };
+          tryFocus();
         };
 
         const handleSubmit = async (e) => {
           e.preventDefault();
+          const term = inputValue.trim();
+          if (!term) return;
 
-          try {
-            const response = await fetch("https://flowise-hako.onrender.com/api/v1/prediction/29e305b3-c569-4676-a454-1c4fdc380c69", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ question: inputValue })
-            });
+          updateUserActivity();
+          setLastAction('search');
 
-            const data = await response.json();
-            let generatedQuery = data.text || data.query || "";
-            
-            // Clean up the query by removing markdown code blocks if present
-            generatedQuery = generatedQuery
-              .replace(/```cypher\s*/gi, '')  // Remove opening cypher code block
-              .replace(/```\s*$/gi, '')       // Remove closing code block
-              .replace(/^```\s*/gi, '')       // Remove any opening code block
-              .trim();                        // Remove extra whitespace
+          const matches = graphData.nodes.filter((node) =>
+            node.name.toLowerCase().includes(term.toLowerCase()) ||
+            (node.affiliation || node.role || '').toLowerCase().includes(term.toLowerCase()) ||
+            (node.location || '').toLowerCase().includes(term.toLowerCase()) ||
+            (node.email || node.website || '').toLowerCase().includes(term.toLowerCase())
+          );
 
-            // Detection for different types of requests
-            const question = inputValue.toLowerCase();
-            
-            // Individual node report detection (check this FIRST)
-            const isNodeReportRequest = (() => {
-              console.log("Checking for node report request:", inputValue);
-              const nodeReportPatterns = [
-                /report.*(?:for|about|on)\s+([A-Za-z\s]+)/i,
-                /(?:generate|create|show)\s+(?:a\s+)?report.*(?:for|about|on)\s+([A-Za-z\s]+)/i,
-                /(?:analysis|summary)\s+(?:for|about|on)\s+([A-Za-z\s]+)/i,
-                /([A-Za-z\s]+)\s+(?:report|analysis|summary)/i,
-                /(?:report|analysis|summary)\s+for\s+([A-Za-z\s]+)/i
-              ];
-              
-              for (const pattern of nodeReportPatterns) {
-                const match = question.match(pattern);
-                if (match && match[1]) {
-                  const name = match[1].trim();
-                  // Filter out common words and action verbs that might be captured
-                  const excludedWords = [
-                    'the', 'and', 'or', 'for', 'about', 'on', 'generate', 'create', 'show', 
-                    'analysis', 'summary', 'report', 'network', 'comprehensive', 'full'
-                  ];
-                  if (name.length > 2 && !excludedWords.includes(name.toLowerCase())) {
-                    // Additional check: make sure it looks like a person's name (contains space or is a single word)
-                    if (name.includes(' ') || name.length > 3) {
-                      console.log("Node report detected for:", name);
-                      return name;
-                    }
-                  }
-                }
-              }
-              return null;
-            })();
+          if (matches.length > 0) {
+            setClickedNode(matches[0].name);
+            focusGraphOnNode(matches[0].name);
+            return;
+          }
 
-            // Report request detection (check this SECOND)
-            const isReportRequest = (() => {
-              const reportKeywords = [
-                'report', 'analysis', 'summary', 'network analysis', 'bridge analysis', 
-                'top connectors', 'network health', 'generate report', 'comprehensive report', 
-                'full analysis', 'network report', 'bridge report', 'connector analysis'
-              ];
-              return reportKeywords.some(keyword => question.includes(keyword));
-            })();
-
-            // More specific detection for true analytical questions vs visualization requests
-            const isTrueAnalyticalQuestion = (() => {
-              const analyticalKeywords = ['how many', 'how much', 'what is', 'what are', 'when', 'where', 'why', 'who', 'which', 'how', 'what'];
-              
-              // True analytical questions that ask for specific data points
-              const analyticalPatterns = [
-                /how many/i,
-                /how much/i,
-                /what is the (count|number|total)/i,
-                /what are the (count|numbers|totals)/i,
-                /count of/i,
-                /total number of/i,
-                /how many (artists|users|people|connections|relationships)/i,
-                /what (roles|locations|websites) (exist|are there)/i,
-                /which (roles|locations|websites)/i,
-                /what is the most common/i,
-                /what is the average/i,
-                /how many people are (in|from)/i
-              ];
-              
-              // Visualization requests that should NOT be treated as analytical
-              const visualizationPatterns = [
-                /show me/i,
-                /display/i,
-                /visualize/i,
-                /find/i,
-                /search for/i,
-                /look for/i,
-                /get/i,
-                /bring up/i,
-                /open/i
-              ];
-              
-              // If it matches visualization patterns, it's NOT analytical
-              if (visualizationPatterns.some(pattern => pattern.test(question))) {
-                return false;
-              }
-              
-              // If it matches analytical patterns, it IS analytical
-              if (analyticalPatterns.some(pattern => pattern.test(question))) {
-                return true;
-              }
-              
-              // Default: if it contains analytical keywords but doesn't match visualization patterns
-              return analyticalKeywords.some(keyword => question.includes(keyword));
-            })();
-
-            if (isNodeReportRequest) {
-              // For individual node report requests
-              try {
-                const nodeName = isNodeReportRequest;
-                console.log("Generating node report for:", nodeName);
-                
-                const session = driver.session({ database: neo4jDb() });
-                
-                // Query for the specific node and its connections
-                const nodeQuery = `
-                  MATCH (u:User)
-                  WHERE toLower(u.name) = toLower($nodeName)
-                  OPTIONAL MATCH (u)-[r:CONNECTED_TO]->(v:User)
-                  RETURN u.name AS sourceName, u.role AS sourceRole, u.location AS sourceLocation, u.website AS sourceWebsite,
-                         v.name AS targetName, v.role AS targetRole, v.location AS targetLocation, v.website AS targetWebsite,
-                         r.note AS connectionNote, r.createdAt AS connectionTime
-                  UNION
-                  MATCH (v:User)-[r:CONNECTED_TO]->(u:User)
-                  WHERE toLower(u.name) = toLower($nodeName)
-                  RETURN v.name AS sourceName, v.role AS sourceRole, v.location AS sourceLocation, v.website AS sourceWebsite,
-                         u.name AS targetName, u.role AS targetRole, u.location AS targetLocation, u.website AS targetWebsite,
-                         r.note AS connectionNote, r.createdAt AS connectionTime
-                  UNION
-                  MATCH (u:User)
-                  WHERE toLower(u.name) = toLower($nodeName)
-                  AND NOT EXISTS((u)-[:CONNECTED_TO]->())
-                  AND NOT EXISTS(()-[:CONNECTED_TO]->(u))
-                  RETURN u.name AS sourceName, u.role AS sourceRole, u.location AS sourceLocation, u.website AS sourceWebsite,
-                         null AS targetName, null AS targetRole, null AS targetLocation, null AS targetWebsite,
-                         null AS connectionNote, null AS connectionTime
-                `;
-                
-                let result = await session.run(nodeQuery, { nodeName });
-                console.log("Node query result:", result.records.length, "records");
-                if (result.records.length > 0) {
-                  console.log("First record:", result.records[0].toObject());
-                }
-                
-                // If no results, try a fuzzy search
-                if (result.records.length === 0) {
-                  console.log("No exact match found, trying fuzzy search...");
-                  const fuzzyQuery = `
-                    MATCH (u:User)
-                    WHERE toLower(u.name) CONTAINS toLower($nodeName)
-                    RETURN u.name AS name, u.role AS role, u.location AS location
-                    LIMIT 5
-                  `;
-                  const fuzzyResult = await session.run(fuzzyQuery, { nodeName });
-                  
-                  if (fuzzyResult.records.length > 0) {
-                    const suggestions = fuzzyResult.records.map(record => record.get('name')).join(', ');
-                    await session.close();
-                    displayNetworkReport(`No exact match found for "${nodeName}". Did you mean one of these?\n\n${suggestions}\n\nPlease try with the exact name.`, `Name Not Found: ${nodeName}`);
-                    return;
-                  }
-                }
-                
-                await session.close();
-
-                // Generate a node-specific report
-                const report = generateNodeReport(result, nodeName, inputValue);
-                
-                // Display the report in a modal
-                displayNetworkReport(report, `Node Analysis: ${nodeName}`);
-                
-                // Clear the input after showing the report
-                setTimeout(() => {
-                  setInputValue("");
-                }, 10000);
-                
-              } catch (queryError) {
-                console.error("Error generating node report:", queryError);
-                displayNetworkReport(`Sorry, I couldn't generate a report for that person. Please check the name and try again.`, inputValue);
-              }
-            } else if (isReportRequest) {
-              // For general report requests, execute the query and generate a comprehensive report
-              try {
-                const session = driver.session({ database: neo4jDb() });
-                const result = await session.run(generatedQuery);
-                await session.close();
-
-                // Generate a comprehensive network analysis report
-                const report = generateNetworkReport(result, inputValue);
-                
-                // Display the report in a modal or notification
-                displayNetworkReport(report, inputValue);
-                
-                // Clear the input after showing the report
-                setTimeout(() => {
-                  setInputValue("");
-                }, 10000); // Keep report visible longer
-                
-              } catch (queryError) {
-                console.error("Error generating report:", queryError);
-                displayNetworkReport("Sorry, I couldn't generate the report. Please try again.", inputValue);
-              }
-            } else if (isTrueAnalyticalQuestion) {
-              // For analytical questions, execute the query and provide a text answer
-              try {
-                const session = driver.session({ database: neo4jDb() });
-                const result = await session.run(generatedQuery);
-                await session.close();
-
-                // Generate a human-readable answer based on the query results
-                const answer = generateAnalyticalAnswer(inputValue, result, generatedQuery);
-                
-                // Display the answer in a modal or notification
-                displayAnalyticalAnswer(answer, inputValue);
-                
-                // Clear the input after showing the answer
-                setTimeout(() => {
-                  setInputValue("");
-                }, 5000); // Keep answer visible longer for analytical questions
-                
-              } catch (queryError) {
-                console.error("Error executing analytical query:", queryError);
-                displayAnalyticalAnswer("Sorry, I couldn't analyze that question. Please try rephrasing it.", inputValue);
-              }
-            } else {
-              // For regular queries, proceed with the existing logic
-              setInputValue(generatedQuery);
-              handleChange({ target: { value: generatedQuery } });
-
-              await loadData(null, generatedQuery);
-
-              // Check if the generated query is a mutation query (updates the graph)
-              const isMutationQuery = /(CREATE|MERGE|SET|DELETE|REMOVE|DETACH DELETE)/i.test(generatedQuery.trim());
-              
-              // If it's a mutation query, immediately return to default state
-              if (isMutationQuery) {
-                
-                // Extract node names from the mutation query to track what was created/modified
-                let extractedNodes = [];
-                
-                // Handle different mutation query patterns
-                if (generatedQuery.includes('DELETE')) {
-                  // For DELETE queries, extract from patterns like DELETE (u:User {name: "John"}) or MATCH (u:User {name: "John"}) DELETE u
-                  const deleteMatches = generatedQuery.match(/\{name:\s*['"]([^'"]+)['"]\}/g);
-                  if (deleteMatches) {
-                    extractedNodes = deleteMatches.map(match => {
-                      const nameMatch = match.match(/name:\s*['"]([^'"]+)['"]/);
-                      return nameMatch ? nameMatch[1] : null;
-                    }).filter(Boolean);
-                  }
-                } else if (generatedQuery.includes('SET')) {
-                  // For SET queries, extract from MATCH clause like MATCH (u:User {name: "John"}) SET u.role = 'admin'
-                  const matchClause = generatedQuery.match(/MATCH\s*\([^)]*\{name:\s*['"]([^'"]+)['"][^}]*\}\)/i);
-                  if (matchClause) {
-                    extractedNodes = [matchClause[1]];
-                  }
-                } else {
-                  // For CREATE/MERGE queries, extract from {name: "nodeName"} patterns
-                  const nodeMatches = generatedQuery.match(/\{([^}]+)\}/g);
-                  extractedNodes = nodeMatches ? 
-                    nodeMatches.map(match => {
-                      const nameMatch = match.match(/name:\s*['"]([^'"]+)['"]/);
-                      return nameMatch ? nameMatch[1] : null;
-                    }).filter(Boolean) : [];
-                }
-                
-                setMutatedNodes(extractedNodes);
-                setLastAction('mutation');
-                
-                // Clear any existing focus timeouts when new visual states are set
-                if (focusTimeout) {
-                  clearTimeout(focusTimeout);
-                  setFocusTimeout(null);
-                }
-                setAutoZoomTriggered(false); // Allow new auto-zoom for this mutation
-                
-                // Immediately return to default query without any delay
-                const defaultQuery = `
-                  MATCH (u:User)-[r:CONNECTED_TO]->(v:User)
-                  RETURN u.name AS source, u.role AS sourceRole, u.location AS sourceLocation, u.website AS sourceWebsite, 
-                         v.name AS target, v.role AS targetRole, v.location AS targetLocation, v.website AS targetWebsite
-                `;
-                await loadData(null, defaultQuery);
-              }
-              
-              // Clear the input after 3 seconds
-              setTimeout(() => {
-                setInputValue("");
-              }, 3000);
-            }
-            
-            } catch (error) {
-              console.error("Flowise call failed:", error);
-            }
+          setAnalyticalAnswer({
+            answer: `No one in your memory graph matches "${term}". Try a name from My Memory.`,
+            question: 'Search',
+            isHtml: false,
+          });
+          setShowAnalyticalModal(true);
+          setTimeout(() => {
+            setShowAnalyticalModal(false);
+            setAnalyticalAnswer(null);
+          }, 4000);
         };
 
         // Helper function to check if a node is new (created via NFC)
@@ -2930,7 +2665,7 @@ return (
       )}
       <input
         type="text"
-        placeholder="Search your conference network..."
+        placeholder="Search by name (e.g. Awu Chen)..."
         style={{ display: "block", width: "95%", height: "40px", margin: "0 auto", textAlign: "center", padding: "8px", border: "1px solid #ccc", borderRadius: "4px" }}
         value={inputValue}
         onChange={handleInputChange}
@@ -3226,14 +2961,16 @@ return (
   graphData={graphData}
   width={typeof window !== 'undefined' ? window.innerWidth : 800}
   height={typeof window !== 'undefined' ? Math.max(window.innerHeight - 160, 400) : 600}
-  nodeId="name"
-  nodeLabel={(node) => {
-    const infoTier = getNodeInfoTier(node.name);
-    if (infoTier === "full" || infoTier === "nameOnly") {
-      return node.name;
+  backgroundColor="#f0f2f8"
+  warmupTicks={80}
+  cooldownTicks={50}
+  onEngineStop={() => {
+    if (fgRef.current && graphData.nodes.length > 0) {
+      fgRef.current.zoomToFit(600, 60);
     }
-    return "";
   }}
+  nodeId="name"
+  nodeLabel={(node) => node.name}
   linkLabel={(link) => {
     if (link.context) return getContextLabel(link.context);
     if (link.note) return link.note;
@@ -3257,134 +2994,82 @@ return (
     // Note: focusTimeout is managed in GraphView component, so we don't need to clear it here
   }}
   nodeCanvasObject={(node, ctx) => {
+    const x = node.x;
+    const y = node.y;
+    if (x == null || y == null) return;
+
     const isHighlighted =
       inputValue &&
       (node.name.toLowerCase().includes(inputValue.toLowerCase()) ||
         (node.location && node.location.toLowerCase().includes(inputValue.toLowerCase())) ||
-        (node.role && node.role.toLowerCase().includes(inputValue.toLowerCase())) ||
-        (node.website && node.website.toLowerCase().includes(inputValue.toLowerCase())));
-    const isNDegree = visibilityNodes.has(node.name);
-    const infoTier = getNodeInfoTier(node.name);
+        ((node.affiliation || node.role) && (node.affiliation || node.role).toLowerCase().includes(inputValue.toLowerCase())) ||
+        ((node.email || node.website) && (node.email || node.website).toLowerCase().includes(inputValue.toLowerCase())));
+    const infoTier = viewerName ? 'full' : getNodeInfoTier(node.name);
     const isViewerNode = viewerNode && node.name === viewerNode;
     const isNodeHovered = hoveredNode === node.name;
 
-    ctx.globalAlpha = isViewerNode ? 1.0 : (isNDegree || viewerName ? 1.0 : 0.35);
-    
-    // Add breathing effect when user is idle or transitioning
-    let nodeRadius = 6;
-    const now = Date.now();
-    
-    // Frame rate optimization: only update every 60ms (16fps) for better performance
-    const frameRate = 60;
-    const time = Math.floor(now / frameRate) * frameRate * 0.001;
-    
-    if (!isUserActive) {
-      // Optimized breathing effect with cached calculations
-      // Use a simpler sine wave with reduced frequency for better performance
-      const breathingScale = 1 + 0.1 * Math.sin(time * 0.8); // Reduced frequency from 1.5 to 0.8
-      nodeRadius = 6 * breathingScale;
-    } else if (scaleTransitionStart && (now - scaleTransitionStart) < scaleTransitionDuration) {
-      // Optimized transition with cached calculations
-      const transitionProgress = Math.min((now - scaleTransitionStart) / scaleTransitionDuration, 1);
-      // Cache the breathing scale calculation
-      const breathingScale = 1 + 0.1 * Math.sin((scaleTransitionStart * 0.001) * 0.8);
-      const targetScale = 1;
-      const currentScale = breathingScale + (targetScale - breathingScale) * transitionProgress;
-      nodeRadius = 6 * currentScale;
-    }
-    
-    // Use latestNode for editing (black), pollingFocusNode for viewing (green), clickedNode for selection (gray), or white for normal
-    // Visual states persist even after focus period ends
-    let fillColor = "white";
+    ctx.globalAlpha = 1.0;
+
+    let nodeRadius = isViewerNode ? 10 : 8;
+    if (isHighlighted) nodeRadius = 11;
+
+    let fillColor = '#5C6BC0';
     if (isViewerNode) {
-      fillColor = "black"; // Always keep viewer node fully black
-    } else if (isNodeHovered) {
-      fillColor = "#d3d3d3"; // Light gray on hover
-    } else if (node.name === latestNode) {
-      fillColor = "black"; // Editable node - persists after focus
-    } else if (node.name === pollingFocusNode) {
-      fillColor = "green"; // Non-editable polling focus - persists after focus
-    } else if (node.name === clickedNode) {
-      fillColor = "gray"; // Clicked node - persists after focus
+      fillColor = '#1a237e';
+    } else if (isNodeHovered || node.name === clickedNode) {
+      fillColor = '#3949AB';
+    } else if (isHighlighted) {
+      fillColor = '#E65100';
     }
-    
-    // Add subtle color shift during breathing animation
-    if (!isUserActive && fillColor === "white") {
-      // Optimized color shift with reduced frequency and frame rate optimization
-      const colorShift = Math.sin(time * 0.8) * 0.1;
-      // Shift towards a very light blue during breathing
-      fillColor = `rgb(${255 + colorShift * 50}, ${255 + colorShift * 30}, ${255 + colorShift * 100})`;
-    } else if (scaleTransitionStart && (now - scaleTransitionStart) < scaleTransitionDuration && fillColor === "white") {
-      // Optimized color transition with cached calculations
-      const transitionProgress = (now - scaleTransitionStart) / scaleTransitionDuration;
-      // Cache the color shift calculation
-      const lastColorShift = Math.sin((scaleTransitionStart * 0.001) * 0.8) * 0.1;
-      const currentColorShift = lastColorShift * (1 - transitionProgress);
-      fillColor = `rgb(${255 + currentColorShift * 50}, ${255 + currentColorShift * 30}, ${255 + currentColorShift * 100})`;
-    }
-    
-    // Add subtle glow effect during breathing animation
-    // Removed shadow and alpha effects for performance
-    
+
     ctx.fillStyle = fillColor;
-    ctx.strokeStyle = (isViewerNode || isNodeHovered) ? "black" : (isHighlighted ? "red" : "black");
+    ctx.strokeStyle = isHighlighted ? '#E65100' : '#ffffff';
     ctx.lineWidth = isHighlighted ? 3 : 2;
 
     ctx.beginPath();
-    ctx.arc(node.x || Math.random() * 500, node.y || Math.random() * 500, nodeRadius, 0, 2 * Math.PI);
+    ctx.arc(x, y, nodeRadius, 0, 2 * Math.PI);
     ctx.fill();
     ctx.stroke();
 
-    // Sticker micro-icons (first 2) when full profile visible
-    if (infoTier === "full" && node.stickers && node.stickers.length > 0) {
+    if (infoTier !== 'minimal' && node.stickers && node.stickers.length > 0) {
       const stickers = normalizeStickers(node.stickers).slice(0, 2);
       stickers.forEach((stickerId, idx) => {
         const meta = getStickerMeta(stickerId);
         ctx.font = '10px sans-serif';
         ctx.fillStyle = meta.color;
-        ctx.fillText(meta.emoji, (node.x || 0) - 8 + idx * 12, (node.y || 0) - 10);
+        ctx.fillText(meta.emoji, x - 8 + idx * 12, y - 12);
       });
     }
 
-    // Reset shadow for text
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "gray";
-    
-    // Extract first name from full name
-    if (infoTier !== "minimal") {
+    if (infoTier !== 'minimal') {
+      ctx.fillStyle = '#222';
+      ctx.font = '11px sans-serif';
       const firstName = node.name.split(' ')[0];
-      ctx.fillText(firstName, node.x + 10, node.y);
+      ctx.fillText(firstName, x + nodeRadius + 3, y + 4);
     }
 
-    ctx.globalAlpha = 1.0; // Reset alpha for next node
+    ctx.globalAlpha = 1.0;
+  }}
+  nodePointerAreaPaint={(node, color, ctx) => {
+    if (node.x == null || node.y == null) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, 12, 0, 2 * Math.PI);
+    ctx.fill();
   }}
   linkColor={(link) => {
-    const sourceName = typeof link.source === 'object' ? link.source.name : link.source;
-    const targetName = typeof link.target === 'object' ? link.target.name : link.target;
-    const isConnected = visibilityNodes.has(sourceName) && visibilityNodes.has(targetName);
-    if (!isConnected) return '#ccc';
     if (link.context) return getContextColor(link.context);
     if (link.impact >= 4) return '#E65100';
     if (link.note) return '#5C6BC0';
-    return '#999';
+    return '#78909C';
   }}
   linkWidth={(link) => {
-    const sourceName = typeof link.source === 'object' ? link.source.name : link.source;
-    const targetName = typeof link.target === 'object' ? link.target.name : link.target;
-    const isConnected = visibilityNodes.has(sourceName) && visibilityNodes.has(targetName);
-    if (!isConnected) return 0.5;
-    if (link.impact >= 4) return 2.5;
-    if (link.impact >= 3) return 2;
-    if (link.note) return 1.5;
-    return 1;
+    if (link.impact >= 4) return 3;
+    if (link.impact >= 3) return 2.5;
+    if (link.note) return 2;
+    return 1.5;
   }}
-  linkOpacity={(link) => {
-    const sourceName = typeof link.source === 'object' ? link.source.name : link.source;
-    const targetName = typeof link.target === 'object' ? link.target.name : link.target;
-    const isConnected = visibilityNodes.has(sourceName) && visibilityNodes.has(targetName);
-    if (viewerName) return 0.85;
-    return isConnected ? 1.0 : 0.25;
-  }}
+  linkOpacity={() => 0.9}
 
   linkCurvature={0.2}
   linkDirectionalArrowRelPos={1}
