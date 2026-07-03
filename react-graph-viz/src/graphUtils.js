@@ -23,12 +23,14 @@ export function buildNode(name, record, prefix) {
 
 export function buildLink(source, target, record) {
   const link = { source, target };
-  if (record && record.has('linkNote')) {
-    link.note = record.get('linkNote') || '';
-    link.context = record.get('linkContext') || '';
-    const impact = record.get('linkImpact');
-    link.impact = impact != null ? Number(impact) : null;
-    link.createdAt = record.get('linkCreatedAt');
+  if (record) {
+    if (record.has('linkNote')) link.note = record.get('linkNote') || '';
+    if (record.has('linkContext')) link.context = record.get('linkContext') || '';
+    if (record.has('linkImpact')) {
+      const impact = record.get('linkImpact');
+      link.impact = impact != null ? Number(impact) : null;
+    }
+    if (record.has('linkCreatedAt')) link.createdAt = record.get('linkCreatedAt');
   }
   return link;
 }

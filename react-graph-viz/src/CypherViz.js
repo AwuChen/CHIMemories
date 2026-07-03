@@ -12,6 +12,9 @@ import {
   setPhoneOwner as persistPhoneOwner,
   clearPhoneOwner,
   getContextColor,
+  getContextLabel,
+  getViewerGraphQuery,
+  capitalizeName,
 } from './appConfig';
 import { getStickerMeta, normalizeStickers } from './stickerCatalog';
 import { parseGraphRecords } from './graphUtils';
@@ -407,29 +410,37 @@ class CypherViz extends React.Component {
 
     let session = this.driver.session({ database: neo4jDb() });
     let res;
+    let queryParams = {};
     
     // Determine which query to use
     let queryToExecute = queryOverride;
     let isCustomQuery = false;
+    const phoneOwner = getPhoneOwner();
+    const viewerGraphQuery = getViewerGraphQuery();
     
     if (!queryToExecute) {
-      // For polling, use default query unless a custom query is active
-      if (newNodeName === null && !queryOverride && !this.state.customQueryActive) {
+      if (!this.state.customQueryActive && phoneOwner) {
+        queryToExecute = viewerGraphQuery;
+        queryParams = { viewerName: capitalizeName(phoneOwner) };
+      } else if (!this.state.customQueryActive) {
         queryToExecute = this.defaultQuery;
       } else {
-        // For user-initiated queries, use state.query but validate it
         queryToExecute = this.state.query;
         isCustomQuery = true;
       }
-    } else if (queryOverride !== this.defaultQuery) {
-      // If a custom query is being executed
+    } else if (queryOverride !== this.defaultQuery && queryOverride !== viewerGraphQuery) {
       isCustomQuery = true;
     }
     
     // Special handling for NFC operations - if we have a pending NFC node, 
     // we should use the default query to reload the graph after mutation
     if (newNodeName && this.pendingNFCNode && newNodeName === this.pendingNFCNode) {
-      queryToExecute = this.defaultQuery;
+      if (phoneOwner) {
+        queryToExecute = viewerGraphQuery;
+        queryParams = { viewerName: capitalizeName(phoneOwner) };
+      } else {
+        queryToExecute = this.defaultQuery;
+      }
       isCustomQuery = false;
     }
     
@@ -457,6 +468,10 @@ class CypherViz extends React.Component {
     if (!isValidQuery) {
       return;
     }
+
+    if (queryToExecute.includes('$viewerName') && phoneOwner) {
+      queryParams = { viewerName: capitalizeName(phoneOwner) };
+    }
     
     // Block DELETE operations for user safety
     const isDeleteQuery = /(DELETE|DETACH DELETE|REMOVE)/i.test(queryToExecute.trim());
@@ -472,7 +487,7 @@ class CypherViz extends React.Component {
         processedQuery = this.addTimestampsToMutationQuery(queryToExecute);
       }
   
-      res = await session.run(processedQuery);
+      res = await session.run(processedQuery, queryParams);
       
               // Handle mutations for ALL queries (not just custom ones)
         if (isMutationQuery) {
@@ -700,13 +715,12 @@ class CypherViz extends React.Component {
       this.updateCount++;
       
       // Mark initial load as complete after first successful update
+      const wasInitialLoad = this.isInitialLoad;
       if (this.isInitialLoad) {
         this.isInitialLoad = false;
       }
       
-      // Preserve latestNode if newNodeName is null but we have a valid latestNode
-      // Don't set latestNode during initial load
-      const nodeToSet = this.isInitialLoad ? null : (newNodeName || this.state.latestNode);
+      const nodeToSet = wasInitialLoad ? null : (newNodeName || this.state.latestNode);
       
       // Note: Focus timeout is now managed in GraphView component
       
@@ -1103,7 +1117,7 @@ class CypherViz extends React.Component {
       
       this.pendingNFCNode = capitalizedCardUser;
       
-      await this.loadData(capitalizedCardUser, this.defaultQuery);
+      await this.loadData(capitalizedCardUser);
       
       let checkCount = 0;
       const waitForStateUpdate = () => {
@@ -1660,17 +1674,32 @@ const ResetPhone = () => {
           }
         }, [latestNode, focusTimeout]);
 
-        // Initial zoom when graph first loads
+        // Initial zoom when graph first loads — center on viewer's network
         useEffect(() => {
-          if (fgRef.current && graphData.nodes.length > 0 && !lastAction) {
-            // Wait a bit for the graph to settle, then zoom to 2x
+          if (fgRef.current && graphData.nodes.length > 0 && viewerNode) {
             setTimeout(() => {
-              if (fgRef.current) {
-                fgRef.current.zoom(2, 1000);
+              if (!fgRef.current) return;
+              const viewerGraphNode = graphData.nodes.find((n) => n.name === viewerNode);
+              if (viewerGraphNode && viewerGraphNode.x != null && viewerGraphNode.y != null) {
+                fgRef.current.centerAt(viewerGraphNode.x, viewerGraphNode.y, 1000);
+                fgRef.current.zoom(1.8, 1000);
+              } else {
+                fgRef.current.zoomToFit(800, 80);
               }
+            }, 1200);
+          } else if (fgRef.current && graphData.nodes.length > 0 && !lastAction) {
+            setTimeout(() => {
+              if (fgRef.current) fgRef.current.zoomToFit(800, 80);
             }, 1000);
           }
-        }, [graphData, fgRef, lastAction]);
+        }, [graphData.nodes.length, viewerNode, fgRef, lastAction]);
+
+        // Reload graph if viewer is set but data is empty (e.g. returning from /me)
+        useEffect(() => {
+          if (viewerName && graphData.nodes.length === 0) {
+            loadData(null);
+          }
+        }, [viewerName, graphData.nodes.length, loadData]);
 
         // Compute 1-degree neighbors of latestNode
         const getOneDegreeNodes = () => {
@@ -2884,7 +2913,21 @@ ${topLocations.map(([location, count]) =>
 
 
 return (
-    <div width="95%">
+    <div style={{ width: '100%', minHeight: '100vh' }}>
+      {!viewerName && graphData.nodes.length === 0 && (
+        <p style={{ color: '#666', fontSize: '14px', padding: '8px' }}>
+          Tap your badge to link this phone, then open the graph to see your conference connections.
+        </p>
+      )}
+      {viewerName && graphData.nodes.length > 0 && (
+        <p style={{ color: '#1a237e', fontSize: '13px', padding: '4px 8px', margin: 0 }}>
+          {viewerName}'s memory graph · {graphData.links.length} connections
+          {graphData.links.filter((l) => l.context === 'demo').length > 0 &&
+            ` · ${graphData.links.filter((l) => l.context === 'demo').length} at Demo Booth`}
+          {graphData.links.filter((l) => l.context === 'session').length > 0 &&
+            ` · ${graphData.links.filter((l) => l.context === 'session').length} at Smell Workshop`}
+        </p>
+      )}
       <input
         type="text"
         placeholder="Search your conference network..."
@@ -3181,6 +3224,8 @@ return (
   <ForceGraph2D
   ref={fgRef}
   graphData={graphData}
+  width={typeof window !== 'undefined' ? window.innerWidth : 800}
+  height={typeof window !== 'undefined' ? Math.max(window.innerHeight - 160, 400) : 600}
   nodeId="name"
   nodeLabel={(node) => {
     const infoTier = getNodeInfoTier(node.name);
@@ -3189,7 +3234,11 @@ return (
     }
     return "";
   }}
-  linkLabel={() => null}
+  linkLabel={(link) => {
+    if (link.context) return getContextLabel(link.context);
+    if (link.note) return link.note;
+    return '';
+  }}
 
   onNodeClick={handleNodeClick}
   onNodeHover={handleNodeHover}
@@ -3219,7 +3268,7 @@ return (
     const isViewerNode = viewerNode && node.name === viewerNode;
     const isNodeHovered = hoveredNode === node.name;
 
-    ctx.globalAlpha = isViewerNode ? 1.0 : (isNDegree ? 1.0 : 0.2);
+    ctx.globalAlpha = isViewerNode ? 1.0 : (isNDegree || viewerName ? 1.0 : 0.35);
     
     // Add breathing effect when user is idle or transitioning
     let nodeRadius = 6;
@@ -3333,7 +3382,8 @@ return (
     const sourceName = typeof link.source === 'object' ? link.source.name : link.source;
     const targetName = typeof link.target === 'object' ? link.target.name : link.target;
     const isConnected = visibilityNodes.has(sourceName) && visibilityNodes.has(targetName);
-    return isConnected ? 1.0 : 0.15;
+    if (viewerName) return 0.85;
+    return isConnected ? 1.0 : 0.25;
   }}
 
   linkCurvature={0.2}

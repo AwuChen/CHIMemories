@@ -55,3 +55,34 @@ export function getContextColor(contextId) {
   const ctx = MEMORY_CONTEXTS.find((c) => c.id === contextId);
   return ctx ? ctx.color : '#999';
 }
+
+export function getContextLabel(contextId) {
+  if (contextId === 'demo') return 'Demo Booth';
+  if (contextId === 'session') return 'Smell Workshop';
+  const ctx = MEMORY_CONTEXTS.find((c) => c.id === contextId);
+  return ctx ? ctx.label : contextId || '';
+}
+
+/** Graph query scoped to one attendee's memory (outgoing connections only). */
+export function getViewerGraphQuery() {
+  return `MATCH (viewer:User {name: $viewerName})-[r:CONNECTED_TO]->(other:User)
+RETURN viewer.name AS source,
+       coalesce(viewer.affiliation, viewer.role) AS sourceAffiliation,
+       viewer.location AS sourceLocation,
+       coalesce(viewer.email, viewer.website) AS sourceEmail,
+       viewer.stickers AS sourceStickers,
+       other.name AS target,
+       coalesce(other.affiliation, other.role) AS targetAffiliation,
+       other.location AS targetLocation,
+       coalesce(other.email, other.website) AS targetEmail,
+       other.stickers AS targetStickers,
+       r.note AS linkNote,
+       r.context AS linkContext,
+       r.impact AS linkImpact,
+       r.createdAt AS linkCreatedAt`;
+}
+
+export function capitalizeName(str) {
+  if (!str) return str;
+  return str.split(' ').map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+}
